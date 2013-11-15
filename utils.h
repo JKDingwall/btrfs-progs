@@ -119,6 +119,7 @@ int get_device_info(int fd, u64 devid,
 u64 get_partition_size(char *dev);
 const char* group_type_str(u64 flags);
 const char* group_profile_str(u64 flags);
+int get_fslist(struct btrfs_ioctl_fslist **out_fslist, u64 *out_count);
 
 int test_minimum_size(const char *file, u32 leafsize);
 
