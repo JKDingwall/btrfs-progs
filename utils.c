@@ -2448,7 +2448,10 @@ u64 get_partition_size(char *dev)
  */
 const char *group_type_str(u64 flag)
 {
-	switch (flag & BTRFS_BLOCK_GROUP_TYPE_MASK) {
+	u64 mask = BTRFS_BLOCK_GROUP_TYPE_MASK |
+		BTRFS_SPACE_INFO_GLOBAL_RSV;
+
+	switch (flag & mask) {
 	case BTRFS_BLOCK_GROUP_DATA:
 		return "Data";
 	case BTRFS_BLOCK_GROUP_SYSTEM:
@@ -2457,6 +2460,8 @@ const char *group_type_str(u64 flag)
 		return "Metadata";
 	case BTRFS_BLOCK_GROUP_DATA|BTRFS_BLOCK_GROUP_METADATA:
 		return "Data+Metadata";
+	case BTRFS_SPACE_INFO_GLOBAL_RSV:
+		return "GlobalReserve";
 	default:
 		return "unknown";
 	}
