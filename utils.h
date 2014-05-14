@@ -48,7 +48,7 @@
 #define UNITS_HUMAN			UNITS_BINARY
 
 int make_btrfs(int fd, const char *device, const char *label,
-	       u64 blocks[6], u64 num_bytes, u32 nodesize,
+	       char *fs_uuid, u64 blocks[6], u64 num_bytes, u32 nodesize,
 	       u32 leafsize, u32 sectorsize, u32 stripesize, u64 features);
 int btrfs_make_root_dir(struct btrfs_trans_handle *trans,
 			struct btrfs_root *root, u64 objectid);
@@ -116,5 +116,6 @@ int get_device_info(int fd, u64 devid,
 u64 get_partition_size(char *dev);
 const char* group_type_str(u64 flags);
 const char* group_profile_str(u64 flags);
+int test_uuid_unique(char *fs_uuid);
 
 #endif
