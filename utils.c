@@ -49,6 +49,7 @@
 #include "utils.h"
 #include "volumes.h"
 #include "ioctl.h"
+#include "btrfs-list.h"
 
 #ifndef BLKDISCARD
 #define BLKDISCARD	_IO(0x12,119)
@@ -1712,6 +1713,8 @@ int get_device_info(int fd, u64 devid,
 
 	di_args->devid = devid;
 	memset(&di_args->uuid, '\0', sizeof(di_args->uuid));
+	/* Clear flags to ensure old kernel returns untouched flags */
+	memset(&di_args->flags, 0, sizeof(di_args->flags));
 
 	ret = ioctl(fd, BTRFS_IOC_DEV_INFO, di_args);
 	return ret ? -errno : 0;
@@ -2351,4 +2354,134 @@ const char *group_profile_str(u64 flag)
 	default:
 		return "unknown";
 	}
+}
+
+/* scans for fsid(s) in the kernel using the btrfs-control
+ * interface.
+ */
+int get_fslist(struct btrfs_ioctl_fslist **out_fslist, u64 *out_count)
+{
+	int ret, fd, e;
+	struct btrfs_ioctl_fslist_args *fsargs;
+	struct btrfs_ioctl_fslist_args *fsargs_saved = NULL;
+	struct btrfs_ioctl_fslist *fslist;
+	u64 sz;
+	int count;
+
+	fd = open("/dev/btrfs-control", O_RDWR);
+	e = errno;
+	if (fd < 0)
+		return -e;
+
+	/* space to hold 512 fsids, doesn't matter if small
+	 * it would fail and return count so then we try again
+	 */
+	count = 512;
+again:
+	sz = sizeof(*fsargs) + sizeof(*fslist) * count;
+
+	fsargs_saved = fsargs = malloc(sz);
+	if (!fsargs) {
+		close(fd);
+		return -ENOMEM;
+	}
+
+	memset(fsargs, 0, sz);
+	fsargs->count = count;
+
+	ret = ioctl(fd, BTRFS_IOC_GET_FSLIST, fsargs);
+	e = errno;
+	if (ret == 1) {
+		/* out of size so reallocate */
+		count = fsargs->count;
+		free(fsargs);
+		goto again;
+	} else if (ret < 0) {
+		ret = -e;
+		goto out;
+	}
+
+	/* ioctl returns fsid count in count parameter*/
+
+	*out_count = fsargs->count;
+	if (*out_count == 0) {
+		*out_fslist = NULL;
+		ret = 0;
+		goto out;
+	}
+
+	fslist = (struct btrfs_ioctl_fslist *) (++fsargs);
+
+	sz = sizeof(*fslist) * *out_count;
+	*out_fslist = malloc(sz);
+	if (*out_fslist == NULL) {
+		ret = -ENOMEM;
+		goto out;
+	}
+	memcpy(*out_fslist, fslist, sz);
+	ret = 0;
+out:
+	free(fsargs_saved);
+	close(fd);
+	return ret;
+}
+
+/* This finds the mount point for a given fsid,
+ *  subvols of the same fs/fsid can be mounted
+ *  so here this picks and lowest subvol id
+ *  and returns the mount point
+*/
+int fsid_to_mntpt(__u8 *fsid, char *mntpt, int *mnt_cnt)
+{
+	int fd = -1, ret = 0;
+	DIR *dirstream = NULL;
+	FILE *f;
+	struct btrfs_ioctl_fs_info_args fi_args;
+	u64 svid, saved_svid = (u64)-1;
+	struct mntent *mnt;
+	int mcnt = 0;
+
+	*mnt_cnt = 0;
+	f = setmntent("/proc/self/mounts", "r");
+	if (f == NULL)
+		return 1;
+
+	while ((mnt = getmntent(f)) != NULL) {
+		if (strcmp(mnt->mnt_type, "btrfs"))
+			continue;
+		fd = open_file_or_dir(mnt->mnt_dir, &dirstream);
+		if (fd < 0) {
+			ret = -errno;
+			return ret;
+		}
+		ret = ioctl(fd, BTRFS_IOC_FS_INFO, &fi_args);
+		if (ret < 0) {
+			ret = -errno;
+			close_file_or_dir(fd, dirstream);
+			break;
+		}
+		if (uuid_compare(fsid, fi_args.fsid)) {
+			close_file_or_dir(fd, dirstream);
+			continue;
+		}
+
+		/* found */
+		mcnt++;
+		ret = btrfs_list_get_path_rootid(fd, &svid);
+		if (ret) {
+			/* error so just copy and return*/
+			strcpy(mntpt, mnt->mnt_dir);
+			close_file_or_dir(fd, dirstream);
+			break;
+		}
+		if (svid < saved_svid) {
+			strcpy(mntpt, mnt->mnt_dir);
+			saved_svid = svid;
+		}
+	}
+	endmntent(f);
+	if (mcnt)
+		*mnt_cnt = mcnt;
+
+	return ret;
 }
