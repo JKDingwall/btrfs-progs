@@ -41,6 +41,7 @@ struct btrfs_ioctl_vol_args {
 #define BTRFS_SUBVOL_CREATE_ASYNC	(1ULL << 0)
 #define BTRFS_SUBVOL_RDONLY		(1ULL << 1)
 #define BTRFS_SUBVOL_QGROUP_INHERIT	(1ULL << 2)
+#define BTRFS_SUBVOL_CREATE_SUBVOLID	(1ULL << 3)
 
 #define BTRFS_QGROUP_INHERIT_SET_LIMITS	(1ULL << 0)
 
@@ -69,7 +70,10 @@ struct btrfs_ioctl_qgroup_limit_args {
 #define BTRFS_SUBVOL_NAME_MAX 4039
 
 struct btrfs_ioctl_vol_args_v2 {
-	__s64 fd;
+	union {
+		__s64 fd;
+		__u64 subvolid;
+	};
 	__u64 transid;
 	__u64 flags;
 	union {
@@ -156,12 +160,15 @@ struct btrfs_ioctl_dev_replace_args {
 	__u64 spare[64];
 };
 
+#define BTRFS_IOCTL_DEV_INFO_MISSING			(1ULL<<0)
+#define BTRFS_IOCTL_DEV_INFO_FLAG_SET			(1ULL<<63)
 struct btrfs_ioctl_dev_info_args {
 	__u64 devid;				/* in/out */
 	__u8 uuid[BTRFS_UUID_SIZE];		/* in/out */
 	__u64 bytes_used;			/* out */
 	__u64 total_bytes;			/* out */
-	__u64 unused[379];			/* pad to 4k */
+	__u64 flags;				/* out */
+	__u64 unused[378];			/* pad to 4k */
 	__u8 path[BTRFS_DEVICE_PATH_NAME_MAX];	/* out */
 };
 
@@ -194,7 +201,9 @@ struct btrfs_balance_args {
 
 	__u64 flags;
 
-	__u64 unused[8];
+	__u64 limit;
+
+	__u64 unused[7];
 } __attribute__ ((__packed__));
 
 struct btrfs_balance_progress {
@@ -388,6 +397,21 @@ struct btrfs_ioctl_received_subvol_args {
  */
 #define BTRFS_SEND_FLAG_OMIT_END_CMD		0x4
 
+/*
+ * The sum of all length fields the receiver will get in write, clone and
+ * fallocate commands.
+ * This can be used by the receiver to compute progress, at the expense of some
+ * initial metadata scan performed by the sender (kernel).
+ *
+ * Added in send stream version 2.
+ */
+#define BTRFS_SEND_FLAG_CALCULATE_DATA_SIZE	0x8
+
+/*
+ * Used by a client to request a version 2 of the send stream.
+ */
+#define BTRFS_SEND_FLAG_STREAM_V2               0x10
+
 struct btrfs_ioctl_send_args {
 	__s64 send_fd;			/* in */
 	__u64 clone_sources_count;	/* in */
@@ -428,6 +452,16 @@ struct btrfs_ioctl_get_dev_stats {
 	__u64 values[BTRFS_DEV_STAT_VALUES_MAX];
 
 	__u64 unused[128 - 2 - BTRFS_DEV_STAT_VALUES_MAX]; /* pad to 1k */
+};
+
+/* deduplication control ioctl modes */
+#define BTRFS_DEDUP_CTL_ENABLE 1
+#define BTRFS_DEDUP_CTL_DISABLE 2
+#define BTRFS_DEDUP_CTL_SET_BS 3
+struct btrfs_ioctl_dedup_args {
+	__u64 cmd;
+	__u64 bs;
+	__u64 unused[14]; /* pad to 128 bytes */
 };
 
 /* BTRFS_IOC_SNAP_CREATE is no longer used by the btrfs command */
@@ -496,6 +530,23 @@ static inline char *btrfs_err_str(enum btrfs_err_code err_code)
 			return NULL;
 	}
 }
+
+/* fs flags */
+#define BTRFS_FS_MOUNTED	(1LLU << 0)
+
+struct btrfs_ioctl_fslist {
+	__u64 self_sz;			/* in/out */
+	__u8 fsid[BTRFS_FSID_SIZE];	/* out */
+	__u64 num_devices;
+	__u64 missing_devices;
+	__u64 total_devices;
+	__u64 flags;
+};
+
+struct btrfs_ioctl_fslist_args {
+	__u64 self_sz;		/* in/out */
+	__u64 count;		/* out */
+};
 
 #define BTRFS_IOC_SNAP_CREATE _IOW(BTRFS_IOCTL_MAGIC, 1, \
 				   struct btrfs_ioctl_vol_args)
@@ -596,6 +647,10 @@ struct btrfs_ioctl_clone_range_args {
 				      struct btrfs_ioctl_get_dev_stats)
 #define BTRFS_IOC_DEV_REPLACE _IOWR(BTRFS_IOCTL_MAGIC, 53, \
 				    struct btrfs_ioctl_dev_replace_args)
+#define BTRFS_IOC_DEDUP_CTL _IOWR(BTRFS_IOCTL_MAGIC, 55, \
+				  struct btrfs_ioctl_dedup_args)
+#define BTRFS_IOC_GET_FSLIST _IOWR(BTRFS_IOCTL_MAGIC, 56, \
+					struct btrfs_ioctl_fslist_args)
 #define BTRFS_IOC_GET_FEATURES _IOR(BTRFS_IOCTL_MAGIC, 57, \
                                   struct btrfs_ioctl_feature_flags)
 #define BTRFS_IOC_SET_FEATURES _IOW(BTRFS_IOCTL_MAGIC, 57, \
