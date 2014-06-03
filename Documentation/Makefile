@@ -45,7 +45,7 @@ MANPAGE_XSL = manpage-normal.xsl
 XMLTO = xmlto
 XMLTO_EXTRA =
 XMLTO_EXTRA = -m manpage-bold-literal.xsl
-GZIP = gzip
+GZIPCMD = gzip
 INSTALL ?= install
 RM ?= rm -f
 LNS ?= ln -sf
@@ -74,15 +74,15 @@ install: install-man
 install-man: man
 	$(INSTALL) -d -m 755 $(DESTDIR)$(man8dir)
 	$(INSTALL) -m 644 $(GZ_MAN8) $(DESTDIR)$(man8dir)
-	$(LNS) btrfs-check.8.gz $(DESTDIR)$(man8dir)
+	$(LNS) btrfs-check.8.gz $(DESTDIR)$(man8dir)/btrfsck.8.gz
 
 clean:
 	$(RM) *.xml *.xml+ *.8 *.8.gz
 
 %.8.gz : %.8
-	$(QUIET_GZIP)$(GZIP) -n -c $< > $@
+	$(QUIET_GZIP)$(GZIPCMD) -n -c $< > $@
 
-%.8 : %.xml 
+%.8 : %.xml
 	$(QUIET_XMLTO)$(RM) $@ && \
 	$(XMLTO) -m $(MANPAGE_XSL) $(XMLTO_EXTRA) man $<
 %.xml : %.txt asciidoc.conf
