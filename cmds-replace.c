@@ -308,6 +308,10 @@ static int cmd_start_replace(int argc, char **argv)
 				"ERROR: ioctl(DEV_REPLACE_START) failed on \"%s\": %s, %s\n",
 				path, strerror(errno),
 				replace_dev_result2string(start_args.result));
+
+			if (errno == EOPNOTSUPP)
+				fprintf(stderr, "WARNING: dev_replace cannot yet handle RAID5/RAID6\n");
+
 			goto leave_with_error;
 		}
 
