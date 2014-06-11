@@ -30,6 +30,7 @@
 #include "print-tree.h"
 #include "volumes.h"
 #include "math.h"
+#include "utils.h"
 
 struct stripe {
 	struct btrfs_device *dev;
@@ -207,7 +208,7 @@ int btrfs_open_devices(struct btrfs_fs_devices *fs_devices, int flags)
 			continue;
 		}
 
-		fd = open(device->name, flags);
+		fd = btrfs_open_block_device(device->name, flags);
 		if (fd < 0) {
 			ret = -errno;
 			goto fail;

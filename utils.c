@@ -2112,6 +2112,40 @@ int test_num_disk_vs_raid(u64 metadata_profile, u64 data_profile,
 	return 0;
 }
 
+/*
+ * there is a race condition between btrfs and udev, we may fail
+ * because udev call btrfs_scan_device() which will open the block
+ * device with O_EXCL. A walkaround solution is to wait kernel
+ * scanning finished and then try again.
+ */
+int btrfs_open_block_device(char *file, int flag)
+{
+	int ret, fd;
+	struct btrfs_ioctl_vol_args args;
+	int tried = 0;
+
+again:
+	fd = open(file, flag);
+	if (fd < 0) {
+		if (!tried && errno == EBUSY && (flag & O_EXCL)) {
+			tried = 1;
+			fd = open("/dev/btrfs-control", O_RDWR);
+			if (fd < 0) {
+				fprintf(stderr,
+					"unable to open /dev/btrfs-control: %s\n",
+					 strerror(errno));
+				return fd;
+			}
+			strncpy(args.name, file, BTRFS_PATH_NAME_MAX);
+			ret = ioctl(fd, BTRFS_IOC_SCAN_DEV, &args);
+			close(fd);
+			if (!ret)
+				goto again;
+		}
+	}
+	return fd;
+}
+
 /* Check if disk is suitable for btrfs
  * returns:
  *  1: something is wrong, estr provides the error
@@ -2150,7 +2184,7 @@ int test_dev_for_mkfs(char *file, int force_overwrite, char *estr)
 		return 1;
 	}
 	/* check if the device is busy */
-	fd = open(file, O_RDWR|O_EXCL);
+	fd = btrfs_open_block_device(file, O_RDWR | O_EXCL);
 	if (fd < 0) {
 		snprintf(estr, sz, "unable to open %s: %s\n", file,
 			strerror(errno));
