@@ -1905,7 +1905,6 @@ next_csum:
 		fprintf(stderr, "Fetch csum failed\n");
 		goto fail_out;
 	} else if (ret == 1) {
-		num_unordered = count_devext_records(&unordered);
 		if (!(*flags & EQUAL_STRIPE))
 			*flags |= EQUAL_STRIPE;
 		goto out;
