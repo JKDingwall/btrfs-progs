@@ -120,4 +120,26 @@ const char* group_type_str(u64 flags);
 const char* group_profile_str(u64 flags);
 int test_uuid_unique(char *fs_uuid);
 
+int test_minimum_size(const char *file, u32 leafsize);
+
+/*
+ * Btrfs minimum size calculation is complicated, it should include at least:
+ * 1. system group size
+ * 2. minimum global block reserve
+ * 3. metadata used at mkfs
+ * 4. space reservation to create uuid for first mount.
+ * Also, raid factor should also be taken into consideration.
+ * To avoid the overkill calculation, (system group + global block rsv) * 2
+ * for *EACH* device should be good enough.
+ */
+static inline u64 btrfs_min_global_blk_rsv_size(u32 leafsize)
+{
+	return leafsize << 10;
+}
+static inline u64 btrfs_min_dev_size(u32 leafsize)
+{
+	return 2 * (BTRFS_MKFS_SYSTEM_GROUP_SIZE +
+		    btrfs_min_global_blk_rsv_size(leafsize));
+}
+
 #endif
