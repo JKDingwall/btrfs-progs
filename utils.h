@@ -39,6 +39,14 @@
 
 #define BTRFS_UUID_UNPARSED_SIZE	37
 
+/*
+ * Output mode of byte units
+ */
+#define UNITS_RAW			(1)
+#define UNITS_BINARY			(2)
+#define UNITS_DECIMAL			(3)
+#define UNITS_HUMAN			UNITS_BINARY
+
 int make_btrfs(int fd, const char *device, const char *label,
 	       char *fs_uuid, u64 blocks[6], u64 num_bytes, u32 nodesize,
 	       u32 leafsize, u32 sectorsize, u32 stripesize, u64 features);
@@ -61,12 +69,13 @@ int check_mounted_where(int fd, const char *file, char *where, int size,
 int btrfs_device_already_in_root(struct btrfs_root *root, int fd,
 				 int super_offset);
 
-int pretty_size_snprintf(u64 size, char *str, size_t str_bytes);
-#define pretty_size(size) 						\
-	({								\
-		static __thread char _str[24];				\
-		(void)pretty_size_snprintf((size), _str, sizeof(_str));	\
-		_str;							\
+int pretty_size_snprintf(u64 size, char *str, size_t str_bytes, int unit_mode);
+#define pretty_size(size) 	pretty_size_mode(size, UNITS_BINARY)
+#define pretty_size_mode(size, mode) 					      \
+	({								      \
+		static __thread char _str[32];				      \
+		(void)pretty_size_snprintf((size), _str, sizeof(_str), mode); \
+		_str;							      \
 	})
 
 int get_mountpt(char *dev, char *mntpt, size_t size);
@@ -104,6 +113,12 @@ int find_mount_root(const char *path, char **mount_root);
 int get_device_info(int fd, u64 devid,
 		struct btrfs_ioctl_dev_info_args *di_args);
 int test_uuid_unique(char *fs_uuid);
+u64 disk_size(char *path);
+int get_device_info(int fd, u64 devid,
+		struct btrfs_ioctl_dev_info_args *di_args);
+u64 get_partition_size(char *dev);
+const char* group_type_str(u64 flags);
+const char* group_profile_str(u64 flags);
 
 int test_minimum_size(const char *file, u32 leafsize);
 
