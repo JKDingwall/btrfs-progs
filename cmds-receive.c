@@ -33,6 +33,7 @@
 #include <wait.h>
 #include <assert.h>
 #include <getopt.h>
+#include <time.h>
 
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -41,6 +42,7 @@
 #include <sys/types.h>
 #include <sys/xattr.h>
 #include <uuid/uuid.h>
+#include <linux/falloc.h>
 
 #include "ctree.h"
 #include "ioctl.h"
@@ -72,6 +74,14 @@ struct btrfs_receive
 	struct subvol_uuid_search sus;
 
 	int honor_end_cmd;
+
+	/* For the subvolume/snapshot we're currently receiving. */
+	u64 total_data_size;
+	u64 bytes_received;
+	time_t last_progress_update;
+	u64 bytes_received_last_update;
+	float progress;
+	const char *target;
 };
 
 static int finish_subvol(struct btrfs_receive *r)
@@ -144,6 +154,16 @@ out:
 	return ret;
 }
 
+static void reset_progress(struct btrfs_receive *r, const char *dest)
+{
+	r->total_data_size = 0;
+	r->bytes_received = 0;
+	r->progress = 0.0;
+	r->last_progress_update = 0;
+	r->bytes_received_last_update = 0;
+	r->target = dest;
+}
+
 static int process_subvol(const char *path, const u8 *uuid, u64 ctransid,
 			  void *user)
 {
@@ -157,6 +177,7 @@ static int process_subvol(const char *path, const u8 *uuid, u64 ctransid,
 		goto out;
 
 	r->cur_subvol = calloc(1, sizeof(*r->cur_subvol));
+	reset_progress(r, "Subvolume");
 
 	if (strlen(r->dest_dir_path) == 0)
 		r->cur_subvol->path = strdup(path);
@@ -206,6 +227,7 @@ static int process_snapshot(const char *path, const u8 *uuid, u64 ctransid,
 		goto out;
 
 	r->cur_subvol = calloc(1, sizeof(*r->cur_subvol));
+	reset_progress(r, "Snapshot");
 
 	if (strlen(r->dest_dir_path) == 0)
 		r->cur_subvol->path = strdup(path);
@@ -286,6 +308,73 @@ out:
 		free(parent_subvol);
 	}
 	return ret;
+}
+
+static int process_total_data_size(u64 size, void *user)
+{
+	struct btrfs_receive *r = user;
+
+	r->total_data_size = size;
+	fprintf(stdout, "About to receive %llu bytes\n", size);
+
+	return 0;
+}
+
+static void update_progress(struct btrfs_receive *r, u64 bytes)
+{
+	float new_progress;
+	time_t now;
+	time_t tdiff;
+
+	if (r->total_data_size == 0)
+		return;
+
+	r->bytes_received += bytes;
+
+	now = time(NULL);
+	tdiff = now - r->last_progress_update;
+	if (tdiff < 1) {
+		if (r->bytes_received == r->total_data_size)
+			fprintf(stdout, "\n");
+		return;
+	}
+
+	new_progress = ((float)r->bytes_received / r->total_data_size) * 100.0;
+
+	if ((int)(new_progress * 100) > (int)(r->progress * 100) ||
+	    r->bytes_received == r->total_data_size) {
+		char line[512];
+		float rate = r->bytes_received - r->bytes_received_last_update;
+		const char *rate_units;
+
+		rate /= tdiff;
+		if (rate > (1024 * 1024)) {
+			rate_units = "MB/s";
+			rate /= 1024 * 1024;
+		} else if (rate > 1024) {
+			rate_units = "KB/s";
+			rate /= 1024;
+		} else {
+			rate_units = "B/s";
+		}
+
+		snprintf(line, sizeof(line),
+			 "%s%s %s, %llu / %llu bytes received, %5.2f%%, %5.2f%s%s",
+			 (g_verbose ? "" : "\r"),
+			 r->target,
+			 r->full_subvol_path,
+			 r->bytes_received, r->total_data_size,
+			 new_progress, rate, rate_units,
+			 (g_verbose ? "\n" : ""));
+		fprintf(stdout, "%s%s", line, (g_verbose ? "" : "        "));
+		fflush(stdout);
+	}
+
+	if (r->bytes_received == r->total_data_size)
+		fprintf(stdout, "\n");
+	r->progress = new_progress;
+	r->last_progress_update = now;
+	r->bytes_received_last_update = r->bytes_received;
 }
 
 static int process_mkfile(const char *path, void *user)
@@ -543,6 +632,10 @@ static int process_write(const char *path, const void *data, u64 offset,
 	u64 pos = 0;
 	int w;
 
+	if (g_verbose >= 2)
+		fprintf(stderr, "write %s, offset %llu, len %llu\n",
+			path, offset, len);
+
 	ret = open_inode_for_write(r, full_path);
 	if (ret < 0)
 		goto out;
@@ -558,6 +651,7 @@ static int process_write(const char *path, const void *data, u64 offset,
 		}
 		pos += w;
 	}
+	update_progress(r, len);
 
 out:
 	free(full_path);
@@ -577,6 +671,11 @@ static int process_clone(const char *path, u64 offset, u64 len,
 	char *subvol_path = NULL;
 	char *full_clone_path = NULL;
 	int clone_fd = -1;
+
+	if (g_verbose >= 2)
+		fprintf(stderr,
+			"clone %s, offset %llu, len %llu, clone path %s, clone offset %llu\n",
+			path, offset, len, clone_path, clone_offset);
 
 	ret = open_inode_for_write(r, full_path);
 	if (ret < 0)
@@ -634,6 +733,7 @@ static int process_clone(const char *path, u64 offset, u64 len,
 				path, strerror(-ret));
 		goto out;
 	}
+	update_progress(r, len);
 
 out:
 	if (si) {
@@ -793,6 +893,42 @@ out:
 	return ret;
 }
 
+static int process_fallocate(const char *path, u32 flags, u64 offset,
+			     u64 len, void *user)
+{
+	struct btrfs_receive *r = user;
+	char *full_path = path_cat(r->full_subvol_path, path);
+	int mode = 0;
+	int ret;
+
+	if (flags & BTRFS_SEND_A_FALLOCATE_FLAG_KEEP_SIZE)
+		mode |= FALLOC_FL_KEEP_SIZE;
+	if (flags & BTRFS_SEND_A_FALLOCATE_FLAG_PUNCH_HOLE)
+		mode |= FALLOC_FL_PUNCH_HOLE;
+
+	if (g_verbose >= 2)
+		fprintf(stderr,
+			"fallocate %s - flags %u, offset %llu, len %llu\n",
+			path, flags, offset, len);
+
+	ret = open_inode_for_write(r, full_path);
+	if (ret < 0)
+		goto out;
+
+	ret = fallocate(r->write_fd, mode, offset, len);
+	if (ret) {
+		ret = -errno;
+		fprintf(stderr,
+			"ERROR: fallocate against %s failed. %s\n",
+			path, strerror(-ret));
+		goto out;
+	}
+	update_progress(r, len);
+
+out:
+	free(full_path);
+	return ret;
+}
 
 static struct btrfs_send_ops send_ops = {
 	.subvol = process_subvol,
@@ -815,6 +951,8 @@ static struct btrfs_send_ops send_ops = {
 	.chmod = process_chmod,
 	.chown = process_chown,
 	.utimes = process_utimes,
+	.total_data_size = process_total_data_size,
+	.fallocate = process_fallocate,
 };
 
 static int do_receive(struct btrfs_receive *r, const char *tomnt, int r_fd,

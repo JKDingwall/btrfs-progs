@@ -332,6 +332,7 @@ static int print_one_fs(struct btrfs_ioctl_fs_info_args *fs_info,
 	char uuidbuf[BTRFS_UUID_UNPARSED_SIZE];
 	struct btrfs_ioctl_dev_info_args *tmp_dev_info;
 	int ret;
+	int new_flag = 0;
 
 	ret = add_seen_fsid(fs_info->fsid);
 	if (ret == -EEXIST)
@@ -352,13 +353,22 @@ static int print_one_fs(struct btrfs_ioctl_fs_info_args *fs_info,
 	for (i = 0; i < fs_info->num_devices; i++) {
 		tmp_dev_info = (struct btrfs_ioctl_dev_info_args *)&dev_info[i];
 
-		/* Add check for missing devices even mounted */
-		fd = open((char *)tmp_dev_info->path, O_RDONLY);
-		if (fd < 0) {
-			missing = 1;
-			continue;
+		new_flag = tmp_dev_info->flags & BTRFS_IOCTL_DEV_INFO_FLAG_SET;
+		if (!new_flag) {
+			/* Add check for missing devices even mounted */
+			fd = open((char *)tmp_dev_info->path, O_RDONLY);
+			if (fd < 0) {
+				missing = 1;
+				continue;
+			}
+			close(fd);
+		} else {
+			if (tmp_dev_info->flags &
+			    BTRFS_IOCTL_DEV_INFO_MISSING) {
+				missing = 1;
+				continue;
+			}
 		}
-		close(fd);
 		printf("\tdevid %4llu size %s used %s path %s\n",
 			tmp_dev_info->devid,
 			pretty_size(tmp_dev_info->total_bytes),
@@ -366,10 +376,38 @@ static int print_one_fs(struct btrfs_ioctl_fs_info_args *fs_info,
 			tmp_dev_info->path);
 	}
 
-	if (missing)
+	if (missing) {
 		printf("\t*** Some devices missing\n");
+		if (!new_flag) {
+			printf("\tOlder kernel detected\n");
+			printf("\t'btrfs dev delete missing' may not work\n");
+		}
+	}
 	printf("\n");
 	return 0;
+}
+
+static void handle_print(char *mnt, char *label)
+{
+	int fd;
+	struct btrfs_ioctl_fs_info_args fs_info_arg;
+	struct btrfs_ioctl_dev_info_args *dev_info_arg = NULL;
+	struct btrfs_ioctl_space_args *space_info_arg;
+
+	if (get_fs_info(mnt, &fs_info_arg, &dev_info_arg)) {
+		fprintf(stdout, "ERROR: get_fs_info failed\n");
+		return;
+	}
+
+	fd = open(mnt, O_RDONLY);
+	if (fd != -1 && !get_df(fd, &space_info_arg)) {
+		print_one_fs(&fs_info_arg, dev_info_arg,
+				space_info_arg, label, mnt);
+		kfree(space_info_arg);
+	}
+	if (fd != -1)
+		close(fd);
+	kfree(dev_info_arg);
 }
 
 /* This function checks if the given input parameter is
@@ -402,6 +440,56 @@ static int check_arg_type(char *input)
 		return BTRFS_ARG_UUID;
 
 	return BTRFS_ARG_UNKNOWN;
+}
+
+static int btrfs_scan_kernel_v2(void *search)
+{
+	int ret = 0;
+	char label[BTRFS_LABEL_SIZE];
+	char mnt[BTRFS_PATH_NAME_MAX + 1];
+	struct btrfs_ioctl_fslist *fslist;
+	struct btrfs_ioctl_fslist *fslist_saved;
+	u64 cnt_fs;
+	int cnt_mnt;
+	__u8 *fsid;
+	__u64 flags;
+	int found = 0;
+
+	ret = get_fslist(&fslist, &cnt_fs);
+	if (ret)
+		return ret;
+	fslist_saved = fslist;
+	while (cnt_fs--) {
+		fsid = fslist->fsid;
+		flags = fslist->flags;
+		fslist++;
+		if (!(flags & BTRFS_FS_MOUNTED))
+			continue;
+		memset(mnt, 0, BTRFS_PATH_NAME_MAX + 1);
+		memset(label, 0, sizeof(label));
+		ret = fsid_to_mntpt(fsid, mnt, &cnt_mnt);
+		if (ret)
+			break;
+
+		if (get_label_mounted(mnt, label)) {
+			ret = 1;
+			break;
+		}
+
+		if (search && !match_search_item_kernel(fsid,
+					mnt, label, search))
+			continue;
+
+		handle_print(mnt, label);
+		if (search) {
+			found = 1;
+			break;
+		}
+	}
+	kfree(fslist_saved);
+	if (search && !found)
+		return 1;
+	return ret;
 }
 
 static int btrfs_scan_kernel(void *search)
@@ -578,6 +666,13 @@ static int cmd_show(int argc, char **argv)
 					goto devs_only;
 				}
 			}
+		} else if (type == BTRFS_ARG_MNTPOINT) {
+			char label[BTRFS_LABEL_SIZE];
+			ret = get_label_mounted(search, label);
+			if (ret)
+				return 1;
+			handle_print(search, label);
+			goto out;
 		}
 	}
 
@@ -585,7 +680,9 @@ static int cmd_show(int argc, char **argv)
 		goto devs_only;
 
 	/* show mounted btrfs */
-	ret = btrfs_scan_kernel(search);
+	ret = btrfs_scan_kernel_v2(search);
+	if (ret == -ENOTTY)
+		ret = btrfs_scan_kernel(search);
 	if (search && !ret) {
 		/* since search is found we are done */
 		goto out;
