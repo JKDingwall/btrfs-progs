@@ -847,9 +847,10 @@ struct btrfs_csum_item {
 #define BTRFS_BLOCK_GROUP_RAID1		(1ULL << 4)
 #define BTRFS_BLOCK_GROUP_DUP		(1ULL << 5)
 #define BTRFS_BLOCK_GROUP_RAID10	(1ULL << 6)
-#define BTRFS_BLOCK_GROUP_RAID5    (1ULL << 7)
-#define BTRFS_BLOCK_GROUP_RAID6    (1ULL << 8)
+#define BTRFS_BLOCK_GROUP_RAID5    	(1ULL << 7)
+#define BTRFS_BLOCK_GROUP_RAID6    	(1ULL << 8)
 #define BTRFS_BLOCK_GROUP_RESERVED	BTRFS_AVAIL_ALLOC_BIT_SINGLE
+#define BTRFS_NR_RAID_TYPES             7
 
 #define BTRFS_BLOCK_GROUP_TYPE_MASK	(BTRFS_BLOCK_GROUP_DATA |    \
 					 BTRFS_BLOCK_GROUP_SYSTEM |  \
@@ -864,6 +865,12 @@ struct btrfs_csum_item {
 
 /* used in struct btrfs_balance_args fields */
 #define BTRFS_AVAIL_ALLOC_BIT_SINGLE	(1ULL << 48)
+
+/*
+ * GLOBAL_RSV does not exist as a on-disk block group type and is used
+ * internally for exporting info about global block reserve from space infos
+ */
+#define BTRFS_SPACE_INFO_GLOBAL_RSV    (1ULL << 49)
 
 #define BTRFS_QGROUP_STATUS_OFF			0
 #define BTRFS_QGROUP_STATUS_ON			1

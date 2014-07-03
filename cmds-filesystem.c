@@ -36,6 +36,7 @@
 #include "volumes.h"
 #include "version.h"
 #include "commands.h"
+#include "cmds-fi-disk_usage.h"
 #include "list_sort.h"
 #include "disk-io.h"
 
@@ -112,48 +113,24 @@ static const char * const filesystem_cmd_group_usage[] = {
 	NULL
 };
 
-static const char * const cmd_df_usage[] = {
-	"btrfs filesystem df <path>",
-	"Show space usage information for a mount point",
-	NULL
+static const char * const cmd_filesystem_df_usage[] = {
+       "btrfs filesystem df <path>",
+       "Show space usage information for a mount point",
+       NULL
 };
 
-static char *group_type_str(u64 flag)
+static void print_df(struct btrfs_ioctl_space_args *sargs)
 {
-	switch (flag & BTRFS_BLOCK_GROUP_TYPE_MASK) {
-	case BTRFS_BLOCK_GROUP_DATA:
-		return "Data";
-	case BTRFS_BLOCK_GROUP_SYSTEM:
-		return "System";
-	case BTRFS_BLOCK_GROUP_METADATA:
-		return "Metadata";
-	case BTRFS_BLOCK_GROUP_DATA|BTRFS_BLOCK_GROUP_METADATA:
-		return "Data+Metadata";
-	default:
-		return "unknown";
-	}
-}
+       u64 i;
+       struct btrfs_ioctl_space_info *sp = sargs->spaces;
 
-static char *group_profile_str(u64 flag)
-{
-	switch (flag & BTRFS_BLOCK_GROUP_PROFILE_MASK) {
-	case 0:
-		return "single";
-	case BTRFS_BLOCK_GROUP_RAID0:
-		return "RAID0";
-	case BTRFS_BLOCK_GROUP_RAID1:
-		return "RAID1";
-	case BTRFS_BLOCK_GROUP_RAID5:
-		return "RAID5";
-	case BTRFS_BLOCK_GROUP_RAID6:
-		return "RAID6";
-	case BTRFS_BLOCK_GROUP_DUP:
-		return "DUP";
-	case BTRFS_BLOCK_GROUP_RAID10:
-		return "RAID10";
-	default:
-		return "unknown";
-	}
+       for (i = 0; i < sargs->total_spaces; i++, sp++) {
+               printf("%s, %s: total=%s, used=%s\n",
+                       group_type_str(sp->flags),
+                       group_profile_str(sp->flags),
+                       pretty_size(sp->total_bytes),
+                       pretty_size(sp->used_bytes));
+       }
 }
 
 static int get_df(int fd, struct btrfs_ioctl_space_args **sargs_ret)
@@ -204,49 +181,35 @@ static int get_df(int fd, struct btrfs_ioctl_space_args **sargs_ret)
 	return 0;
 }
 
-static void print_df(struct btrfs_ioctl_space_args *sargs)
+static int cmd_filesystem_df(int argc, char **argv)
 {
-	u64 i;
-	struct btrfs_ioctl_space_info *sp = sargs->spaces;
+       struct btrfs_ioctl_space_args *sargs = NULL;
+       int ret;
+       int fd;
+       char *path;
+       DIR *dirstream = NULL;
 
-	for (i = 0; i < sargs->total_spaces; i++, sp++) {
-		printf("%s, %s: total=%s, used=%s\n",
-			group_type_str(sp->flags),
-			group_profile_str(sp->flags),
-			pretty_size(sp->total_bytes),
-			pretty_size(sp->used_bytes));
-	}
-}
+       if (check_argc_exact(argc, 2))
+               usage(cmd_filesystem_df_usage);
 
-static int cmd_df(int argc, char **argv)
-{
-	struct btrfs_ioctl_space_args *sargs = NULL;
-	int ret;
-	int fd;
-	char *path;
-	DIR  *dirstream = NULL;
+       path = argv[1];
 
-	if (check_argc_exact(argc, 2))
-		usage(cmd_df_usage);
+       fd = open_file_or_dir(path, &dirstream);
+       if (fd < 0) {
+               fprintf(stderr, "ERROR: can't access '%s'\n", path);
+               return 1;
+       }
+       ret = get_df(fd, &sargs);
 
-	path = argv[1];
+       if (!ret && sargs) {
+               print_df(sargs);
+               free(sargs);
+       } else {
+               fprintf(stderr, "ERROR: get_df failed %s\n", strerror(-ret));
+       }
 
-	fd = open_file_or_dir(path, &dirstream);
-	if (fd < 0) {
-		fprintf(stderr, "ERROR: can't access '%s'\n", path);
-		return 1;
-	}
-	ret = get_df(fd, &sargs);
-
-	if (!ret && sargs) {
-		print_df(sargs);
-		free(sargs);
-	} else {
-		fprintf(stderr, "ERROR: get_df failed %s\n", strerror(-ret));
-	}
-
-	close_file_or_dir(fd, dirstream);
-	return !!ret;
+       close_file_or_dir(fd, dirstream);
+       return !!ret;
 }
 
 static int match_search_item_kernel(__u8 *fsid, char *mnt, char *label,
@@ -999,13 +962,16 @@ static int cmd_label(int argc, char **argv)
 
 const struct cmd_group filesystem_cmd_group = {
 	filesystem_cmd_group_usage, NULL, {
-		{ "df", cmd_df, cmd_df_usage, NULL, 0 },
+		{ "df", cmd_filesystem_df, cmd_filesystem_df_usage, NULL, 0 },
 		{ "show", cmd_show, cmd_show_usage, NULL, 0 },
 		{ "sync", cmd_sync, cmd_sync_usage, NULL, 0 },
 		{ "defragment", cmd_defrag, cmd_defrag_usage, NULL, 0 },
 		{ "balance", cmd_balance, NULL, &balance_cmd_group, 1 },
 		{ "resize", cmd_resize, cmd_resize_usage, NULL, 0 },
 		{ "label", cmd_label, cmd_label_usage, NULL, 0 },
+		{ "usage", cmd_filesystem_usage,
+			cmd_filesystem_usage_usage, NULL, 0 },
+
 		NULL_CMD_STRUCT
 	}
 };
